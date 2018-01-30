@@ -42,10 +42,12 @@ public:
 
 		bool listen_twist;
 
-		sp_nh.param("listen_twist", listen_twist, false);
+		sp_nh.param("listen_twist", listen_twist, true);
+
+    //debug_pub = sp_nh.advertise<geometry_msgs::TwistStamped>("dbgr",1000);
 
 		if (listen_twist)
-			vision_vel_sub = sp_nh.subscribe("speed_twist", 10, &VisionSpeedEstimatePlugin::vel_twist_cb, this);
+			vision_vel_sub = sp_nh.subscribe("speed_twist", 10, &VisionSpeedEstimatePlugin::vel_cb, this);
 		else
 			vision_vel_sub = sp_nh.subscribe("speed_vector", 10, &VisionSpeedEstimatePlugin::vel_speed_cb, this);
 	}
@@ -59,6 +61,11 @@ private:
 	ros::NodeHandle sp_nh;
 
 	ros::Subscriber vision_vel_sub;
+
+  /*
+  ros::Publisher debug_pub;
+  geometry_msgs::TwistStamped msg;
+  */
 
 	/* -*- low-level send -*- */
 
@@ -80,6 +87,27 @@ private:
 		UAS_FCU(m_uas)->send_message_ignore_drop(vs);
 	}
 
+  void vision_velocity_estimate(uint64_t usec,
+      Eigen::Vector3d &lin, Eigen::Vector3d &ang)
+  {
+    /*
+    msg.twist.linear.x+=1;
+    debug_pub.publish(msg);
+    */
+
+    mavlink::common::msg::VISION_VELOCITY_ESTIMATE vs{};
+    vs.usec=usec;
+
+    vs.vx = lin.x();
+    vs.vy = lin.y();
+    vs.vz = lin.z();
+    vs.rollspeed = ang.x();
+    vs.pitchspeed = ang.y();
+    vs.yawspeed = ang.z();
+
+    UAS_FCU(m_uas)->send_message_ignore_drop(vs);
+  }
+
 	/**
 	 * @todo Suggest modification on PX4 firmware to MAVLINK VISION_SPEED_ESTIMATE
 	 * msg name, which should be called instead VISION_VELOCITY_ESTIMATE
@@ -100,6 +128,17 @@ private:
 		vision_speed_estimate(stamp.toNSec() / 1000, vel);
 	}
 
+  void send_vision_velocity(const geometry_msgs::Twist &vel_enu, const ros::Time &stamp) {
+    Eigen::Vector3d lin_,ang_;
+    tf::vectorMsgToEigen(vel_enu.linear,lin_);
+    tf::vectorMsgToEigen(vel_enu.angular,ang_);
+    //Transform from ENU to NED frame
+    auto lin = ftf::transform_frame_enu_ned(lin_);
+    auto ang = ftf::transform_frame_enu_ned(ang_);
+
+    vision_velocity_estimate(stamp.toNSec() / 1000, lin_, ang_);
+  }
+
 	/* -*- callbacks -*- */
 
 	void vel_twist_cb(const geometry_msgs::TwistStamped::ConstPtr &req) {
@@ -109,6 +148,10 @@ private:
 	void vel_speed_cb(const geometry_msgs::Vector3Stamped::ConstPtr &req) {
 		send_vision_speed(req->vector, req->header.stamp);
 	}
+
+  void vel_cb(const geometry_msgs::TwistStamped::ConstPtr &req) {
+    send_vision_velocity(req->twist,req->header.stamp);
+  }
 };
 }	// namespace extra_plugins
 }	// namespace mavros
